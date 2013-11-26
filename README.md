@@ -35,7 +35,7 @@ The buildpack will detect your app as ASP.NET if it has the file `global.asax` i
 * ~~Get default Visual Studio templates working (you just have to fix casing problems~~
 * More Mono/XSP versions and ability to select version, like [Python buildpack](https://devcenter.heroku.com/articles/python-runtimes)
 * Get Katana hosting working with System.Web Host
-* Visual Basic!
+* F#!
 
 ## Pre-compiling Binaries
 
