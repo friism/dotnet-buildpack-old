@@ -1,4 +1,4 @@
-# Mono Heroku Buildpack
+## Mono Heroku Buildpack
 
 This is a [Heroku buildpack](http://devcenter.heroku.com/articles/buildpack) for Mono that will run [ASP.NET](http://friism.com/running-net-on-heroku) and [Katana/OWIN applications](http://friism.com/running-owin-katana-apps-on-heroku).
 
