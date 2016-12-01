@@ -19,56 +19,79 @@ source $BUILDPACK_DIR/bin/util
 export_env_dir ${ENV_DIR}
 
 : ${LIBUV_VERSION:="1.10.1"}
+: ${NODEJS_VERSION:="6.9.1"}
 : ${DOTNET_SDK_VERSION:="1.0.0-preview2-1-003177"}
 : ${DOTNET_RUNTIME_VERSION:="1.1.0"}
+: ${LIBUNWIND_VERSION:="1.1-4.1"}
 
 export NUGET_XMLDOC_MODE=skip
 export DOTNET_CLI_TELEMETRY_OPTOUT=1
 export DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1
 
-SRC_DIR=`mktemp -d`
+SRC_DIR=`mktemp -d`/app
+mkdir -p ${SRC_DIR}
 # Move the app source code into temporary src dir using subshell to not leak shopt
 (
 	shopt -s dotglob
 	mv ${BUILD_DIR}/* ${SRC_DIR}
 )
 
-mkdir -p $BUILD_DIR/.profile.d
+mkdir -p ${BUILD_DIR}/.profile.d
+mkdir -p ${CACHE_DIR}
 
+# Get libunwind
 # TODO: factor this out into method
-DEB_DIR=`mktemp -d`
-curl -o ${DEB_DIR}/libunwind8_1.1-3.2_amd64.deb -LOs https://mirrors.kernel.org/ubuntu/pool/main/libu/libunwind/libunwind8_1.1-3.2_amd64.deb
-mkdir -p ${BUILD_DIR}/.apt
-dpkg -x ${DEB_DIR}/libunwind8_1.1-3.2_amd64.deb $BUILD_DIR/.apt/
-export LD_LIBRARY_PATH="$BUILD_DIR/.apt/usr/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH"
+LIBUNWIND_DEB_DIR=${CACHE_DIR}/deb/libunwind/${LIBUNWIND_VERSION}
+if [ ! -f ${LIBUNWIND_DEB_DIR}/libunwind.deb ]; then
+	rm -rf ${CACHE_DIR}/deb/libunwind/* || true
+	mkdir -p ${LIBUNWIND_DEB_DIR}
 
+	echo "Downloading libunwind version ${LIBUNWIND_VERSION}"
+	curl -o ${LIBUNWIND_DEB_DIR}/libunwind.deb -sSL https://mirrors.kernel.org/ubuntu/pool/main/libu/libunwind/libunwind8_${LIBUNWIND_VERSION}_amd64.deb
+fi
+mkdir -p ${BUILD_DIR}/.apt
+dpkg -x ${LIBUNWIND_DEB_DIR}/libunwind.deb $BUILD_DIR/.apt/
+export LD_LIBRARY_PATH="$BUILD_DIR/.apt/usr/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH"
 cat <<EOF >$BUILD_DIR/.profile.d/000_apt.sh
 export LD_LIBRARY_PATH="\$HOME/.apt/usr/lib/x86_64-linux-gnu:\$LD_LIBRARY_PATH"
 EOF
 
-mkdir -p ${CACHE_DIR}
-
+# Get Dotnet Core
 DOTNET_CACHE_LOCATION=${CACHE_DIR}/dotnet/${DOTNET_SDK_VERSION}
 if [ ! -d ${DOTNET_CACHE_LOCATION} ]; then
 	rm -rf ${CACHE_DIR}/dotnet/* || true
-	DOTNET_SDK_DOWNLOAD_URL=https://dotnetcli.blob.core.windows.net/dotnet/preview/Binaries/$DOTNET_SDK_VERSION/dotnet-dev-ubuntu-x64.$DOTNET_SDK_VERSION.tar.gz
-	DOTNET_RUNTIME_DOWNLOAD_URL=http://download.microsoft.com/download/A/F/6/AF610E6A-1D2D-47D8-80B8-F178951A0C72/Binaries/dotnet-ubuntu-x64.${DOTNET_RUNTIME_VERSION}.tar.gz
-
 	mkdir -p ${DOTNET_CACHE_LOCATION}/{sdk,runtime}
 
-	curl -sSL $DOTNET_SDK_DOWNLOAD_URL | tar xz -C ${DOTNET_CACHE_LOCATION}/sdk
+	echo "Downloading .NET SDK version ${DOTNET_SDK_VERSION} and runtime version ${DOTNET_RUNTIME_VERSION}"
+
+	DOTNET_SDK_DOWNLOAD_URL=https://dotnetcli.blob.core.windows.net/dotnet/preview/Binaries/$DOTNET_SDK_VERSION/dotnet-dev-ubuntu-x64.$DOTNET_SDK_VERSION.tar.gz
+	curl -sSL ${DOTNET_SDK_DOWNLOAD_URL} | tar xz -C ${DOTNET_CACHE_LOCATION}/sdk
 	find ${DOTNET_CACHE_LOCATION}/sdk/sdk/${DOTNET_SDK_VERSION}/runtimes/* -maxdepth 0 ! -name unix -exec rm -r {} +
 	rm -f ${DOTNET_CACHE_LOCATION}/sdk/sdk/${DOTNET_SDK_VERSION}/nuGetPackagesArchive.lzma
 
-	curl -sSL $DOTNET_RUNTIME_DOWNLOAD_URL | tar xz -C ${DOTNET_CACHE_LOCATION}/runtime
-	find ${DOTNET_CACHE_LOCATION}/runtime/* -maxdepth 10 -name Microsoft.CodeAnalysis.VisualBasic.dll -exec rm -r {} +
+	DOTNET_RUNTIME_DOWNLOAD_URL=http://download.microsoft.com/download/A/F/6/AF610E6A-1D2D-47D8-80B8-F178951A0C72/Binaries/dotnet-ubuntu-x64.${DOTNET_RUNTIME_VERSION}.tar.gz
+	curl -sSL ${DOTNET_RUNTIME_DOWNLOAD_URL} | tar xz -C ${DOTNET_CACHE_LOCATION}/runtime
 fi
-
 export PATH="${DOTNET_CACHE_LOCATION}/sdk:$PATH"
 cp -r ${DOTNET_CACHE_LOCATION}/runtime ${BUILD_DIR}/dotnet
 cat <<EOF >$BUILD_DIR/.profile.d/000_dotnet.sh
 export PATH="\$HOME/dotnet:\$PATH"
 EOF
+
+# Get Node.js
+NODEJS_CACHE_LOCATION=${CACHE_DIR}/nodejs/${NODEJS_VERSION}
+export PATH="${NODEJS_CACHE_LOCATION}/node-v${NODEJS_VERSION}-linux-x64/bin:$PATH"
+if [ ! -d ${NODEJS_CACHE_LOCATION} ]; then
+	rm -rf ${CACHE_DIR}/nodejs/* || true
+	NODEJS_DOWNLOAD_URL=https://nodejs.org/dist/v${NODEJS_VERSION}/node-v${NODEJS_VERSION}-linux-x64.tar.xz
+
+	mkdir -p ${NODEJS_CACHE_LOCATION}
+
+	echo "Downloading Node.js version ${NODEJS_DOWNLOAD_URL}"
+	curl -sSL ${NODEJS_DOWNLOAD_URL} | tar xJ -C ${NODEJS_CACHE_LOCATION}
+	npm install -g grunt-cli bower gulp
+fi
+npm config set cache ${NODEJS_CACHE_LOCATION}/npm/cache -g
 
 # Build the project
 DEPLOYMENT_FILE_LOCATION=${SRC_DIR}/.deployment
@@ -86,13 +109,22 @@ fi
 echo "Building ${PROJECT_JSON_FILE}"
 
 export NUGET_PACKAGES="${CACHE_DIR}/nuget/cache"
-
 dotnet restore ${PROJECT_JSON_FILE}
 
 dotnet publish ${PROJECT_JSON_FILE} --output ${BUILD_DIR} $DNU_FLAGS --runtime ubuntu.14.04-x64 --configuration Release 
 
-curl https://github.com/friism/libuv-builder/releases/download/v${LIBUV_VERSION}/libuv-${LIBUV_VERSION}.tar.gz -sL \
-	 | tar xz -C ${BUILD_DIR}
+
+# Get libuv
+LIBUV_CACHE_LOCATION=${CACHE_DIR}/libuv/${LIBUV_VERSION}
+if [ ! -d ${LIBUV_CACHE_LOCATION} ]; then
+	rm -rf ${CACHE_DIR}/libuv/* || true
+	mkdir -p ${LIBUV_CACHE_LOCATION}
+
+	echo "Downloading libuv version ${LIBUV_VERSION}"
+	curl https://github.com/friism/libuv-builder/releases/download/v${LIBUV_VERSION}/libuv-${LIBUV_VERSION}.tar.gz -sSL \
+	 | tar xz -C ${LIBUV_CACHE_LOCATION}
+fi
+cp -r ${LIBUV_CACHE_LOCATION}/libuv ${BUILD_DIR}
 cat <<EOF >$BUILD_DIR/.profile.d/000_libuv.sh
 export LD_LIBRARY_PATH="\$HOME/libuv/lib:\$LD_LIBRARY_PATH"
 EOF
@@ -102,6 +134,6 @@ if [ -e ${SRC_DIR}/Procfile ]; then
 	cp ${SRC_DIR}/Procfile ${BUILD_DIR}
 else
 	cat << EOT >> ${BUILD_DIR}/Procfile
-web: ASPNETCORE_URLS='http://+:\$PORT' dotnet . -c Release
+web: ASPNETCORE_URLS='http://+:\$PORT' dotnet ./app.dll -c Release
 EOT
 fi
