@@ -87,7 +87,7 @@ if [ ! -d ${NODEJS_CACHE_LOCATION} ]; then
 
 	mkdir -p ${NODEJS_CACHE_LOCATION}
 
-	echo "Downloading Node.js version ${NODEJS_DOWNLOAD_URL}"
+	echo "Downloading Node.js version ${NODEJS_VERSION}"
 	curl -sSL ${NODEJS_DOWNLOAD_URL} | tar xJ -C ${NODEJS_CACHE_LOCATION}
 	npm install -g grunt-cli bower gulp
 fi
